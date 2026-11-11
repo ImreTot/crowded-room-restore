@@ -1,0 +1,106 @@
+services:
+  telegram_bot:
+    build:
+      context: ../apps/telegram_bot
+      dockerfile: ../../docker/PythonDockerfile
+      target: dev
+    env_file:
+      - ../.env
+    volumes:
+      - ../apps/telegram_bot:/app
+    command: ['watchfiles', 'run.run']
+    depends_on:
+      api:
+        condition: service_healthy
+
+  api:
+    build:
+      context: ../services/api
+      dockerfile: ../../docker/PythonDockerfile
+      target: dev
+    env_file:
+      - ../.env
+    volumes:
+      - ../services/api:/app
+    working_dir: /app
+    command:
+      - sh
+      - -c
+      - alembic upgrade head && exec uvicorn src.main:app --host 0.0.0.0 --port 8000 --reload
+    depends_on:
+      database:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+    healthcheck:
+      test: ['CMD', 'python', '-c', "import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=2).close()"]
+      interval: 5s
+      timeout: 5s
+      retries: 15
+      start_period: 10s
+    ports:
+      - '127.0.0.1:8000:8000'
+
+  worker:
+    build:
+      context: ../services/worker
+      dockerfile: ../../docker/PythonDockerfile
+      target: dev
+    env_file:
+      - ../.env
+    volumes:
+      - ../services/worker:/app
+    command: ['python', '-m', 'src.main']
+    restart: on-failure
+    depends_on:
+      api:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+
+  database:
+    image: postgres:18.1
+    environment:
+      POSTGRES_DB: app
+      POSTGRES_USER: app
+      POSTGRES_PASSWORD: app
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -h 127.0.0.1 -U app -d app']
+      interval: 2s
+      timeout: 5s
+      retries: 15
+      start_period: 5s
+    volumes:
+      - ../shared/database/data:/var/lib/postgresql
+    ports:
+      - '5432:5432'
+
+  kafka:
+    image: apache/kafka:4.4.0
+    environment:
+      CLUSTER_ID: 4L6g3nShT-eMCtK--X86sw
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_LISTENERS: PLAINTEXT://:9092,CONTROLLER://:9093
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+      KAFKA_NUM_PARTITIONS: 1
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: 'true'
+      KAFKA_LOG_DIRS: /var/lib/kafka/data
+    volumes:
+      - kafka_data:/var/lib/kafka/data
+    healthcheck:
+      test: ['CMD', '/opt/kafka/bin/kafka-broker-api-versions.sh', '--bootstrap-server', 'localhost:9092']
+      interval: 5s
+      timeout: 10s
+      retries: 20
+      start_period: 15s
+
+volumes:
+  kafka_data:

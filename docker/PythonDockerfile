@@ -1,0 +1,25 @@
+FROM python:3.13 AS base
+
+RUN pip install --no-cache-dir uv
+
+ENV PYTHONUNBUFFERED=1 \
+    UV_COMPILE_BYTECODE=1 \
+    UV_LINK_MODE=copy \
+    UV_SYSTEM_PYTHON=1 \
+    UV_PROJECT_ENVIRONMENT=/usr/local
+
+WORKDIR /app
+
+COPY pyproject.toml uv.lock ./
+
+FROM base AS prod
+
+RUN --mount=type=cache,target=/root/.cache/uv \
+    uv sync --frozen --no-dev --no-install-project
+
+COPY . .
+
+FROM prod AS dev
+
+RUN --mount=type=cache,target=/root/.cache/uv \
+    uv sync --frozen
